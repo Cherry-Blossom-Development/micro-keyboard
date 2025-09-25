@@ -7,6 +7,9 @@
 #define NUM_PIXELS 1  // Single onboard LED
 static uint32_t lastLedToggle = 0;
 static bool ledState = false;
+static uint32_t lastKeyPress = 0;
+static bool keyPressBlinkActive = false;
+#define KEY_BLINK_DURATION 200  // Red blink duration in ms
 
 NeoPixelConnect strip(LED_PIN, NUM_PIXELS, pio0, 0);
 
@@ -50,6 +53,20 @@ void setupLED() {
 
 void updateLED() {
   uint32_t now = millis();
+  
+  // Check if we should show red blink for key press
+  if (keyPressBlinkActive) {
+    if (now - lastKeyPress < KEY_BLINK_DURATION) {
+      // Show red during key press blink
+      strip.neoPixelSetValue(0, 255, 0, 0, true);
+      return;
+    } else {
+      // Key press blink finished
+      keyPressBlinkActive = false;
+    }
+  }
+  
+  // Normal blue heartbeat blink
   if (now - lastLedToggle >= 1000) {  // Toggle every 1000ms (1 second)
     ledState = !ledState;
     if (ledState) {
@@ -185,7 +202,10 @@ void sendHIDReport() {
         
         if (code != KC_NO) {
           if (currentState) {
-            // Key pressed
+            // Key pressed - trigger red LED blink
+            lastKeyPress = millis();
+            keyPressBlinkActive = true;
+            
             if (code >= 0xE0 && code <= 0xE7) {
               // Modifier key
               switch (code) {

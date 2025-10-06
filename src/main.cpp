@@ -1,25 +1,49 @@
 #include <Arduino.h>
-#include <Keyboard.h>
-#include <NeoPixelConnect.h>
+
+#ifdef ESP32_C3
+  #include <BleKeyboard.h>
+#else
+  #include <NeoPixelConnect.h>
+  #include <Keyboard.h>
+#endif
 
 // ---------------- LED Configuration ----------------
-#define LED_PIN 16  // WS2812 RGB LED on RP2040 Zero
-#define NUM_PIXELS 1  // Single onboard LED
+#ifdef ESP32_C3
+  #define LED_PIN 8  // Simple blue LED on ESP32-C3 (adjust as needed)
+#else
+  #define LED_PIN 16  // WS2812 RGB LED on RP2040 Zero
+  #define NUM_PIXELS 1  // Single onboard LED
+#endif
 static uint32_t lastLedToggle = 0;
 static bool ledState = false;
 static uint32_t lastKeyPress = 0;
 static bool keyPressBlinkActive = false;
-#define KEY_BLINK_DURATION 200  // Red blink duration in ms
+#define KEY_BLINK_DURATION 200  // Key press blink duration in ms
 
-NeoPixelConnect strip(LED_PIN, NUM_PIXELS, pio0, 0);
+#ifdef ESP32_C3
+  BleKeyboard bleKeyboard("Thumb35", "MicroKeyboard", 100);
+#else
+  NeoPixelConnect strip(LED_PIN, NUM_PIXELS, pio0, 0);
+#endif
 
-// ---------------- Matrix wiring (breadboardable pads only) ----------------
-// Rows (R0..R3): GP0, GP1, GP2, GP3
-// Columns (C0..C9): GP4, GP5, GP6, GP7, GP8, GP14, GP15, GP26, GP27, GP28
-static const uint8_t ROWS = 4;
-static const uint8_t COLS = 10;
-static const uint8_t rowPins[ROWS] = {0, 1, 2, 3};
-static const uint8_t colPins[COLS] = {4, 5, 6, 7, 8, 14, 15, 26, 27, 28};
+// ---------------- Matrix wiring ----------------
+#ifdef ESP32_C3
+  // ESP32-C3 pin mapping (adjust as needed for your specific board)
+  // Rows (R0..R3): GPIO0, GPIO1, GPIO2, GPIO3
+  // Columns (C0..C9): GPIO4, GPIO5, GPIO6, GPIO7, GPIO9, GPIO10, GPIO18, GPIO19, GPIO20, GPIO21
+  static const uint8_t ROWS = 4;
+  static const uint8_t COLS = 10;
+  static const uint8_t rowPins[ROWS] = {0, 1, 2, 3};
+  static const uint8_t colPins[COLS] = {4, 5, 6, 7, 9, 10, 18, 19, 20, 21};
+#else
+  // RP2040 pin mapping (breadboardable pads only)
+  // Rows (R0..R3): GP0, GP1, GP2, GP3
+  // Columns (C0..C9): GP4, GP5, GP6, GP7, GP8, GP14, GP15, GP26, GP27, GP28
+  static const uint8_t ROWS = 4;
+  static const uint8_t COLS = 10;
+  static const uint8_t rowPins[ROWS] = {0, 1, 2, 3};
+  static const uint8_t colPins[COLS] = {4, 5, 6, 7, 8, 14, 15, 26, 27, 28};
+#endif
 
 // Fn key coordinate (hold = Layer 1)
 static const uint8_t FN_ROW = 3;
@@ -40,25 +64,39 @@ static uint8_t stableCount[ROWS][COLS];
 // Keyboard HID setup
 // -------------------------------------------------------------------------
 void setupHID() {
+#ifdef ESP32_C3
+  bleKeyboard.begin();
+  delay(100);
+#else
   Keyboard.begin();
   delay(100);
+#endif
 }
 
 // -------------------------------------------------------------------------
 // LED setup and control
 // -------------------------------------------------------------------------
 void setupLED() {
+#ifdef ESP32_C3
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);  // Start with LED off
+#else
   strip.neoPixelClear(true);  // Start with LED off
+#endif
 }
 
 void updateLED() {
   uint32_t now = millis();
   
-  // Check if we should show red blink for key press
+  // Check if we should show blink for key press
   if (keyPressBlinkActive) {
     if (now - lastKeyPress < KEY_BLINK_DURATION) {
-      // Show red during key press blink
+      // Turn on LED during key press blink
+#ifdef ESP32_C3
+      digitalWrite(LED_PIN, HIGH);
+#else
       strip.neoPixelSetValue(0, 255, 0, 0, true);
+#endif
       return;
     } else {
       // Key press blink finished
@@ -66,15 +104,23 @@ void updateLED() {
     }
   }
   
-  // Normal blue heartbeat blink
+  // Normal heartbeat blink
   if (now - lastLedToggle >= 1000) {  // Toggle every 1000ms (1 second)
     ledState = !ledState;
     if (ledState) {
-      // Turn on with a nice blue color
+      // Turn on LED
+#ifdef ESP32_C3
+      digitalWrite(LED_PIN, HIGH);
+#else
       strip.neoPixelSetValue(0, 0, 0, 255, true);
+#endif
     } else {
-      // Turn off
+      // Turn off LED
+#ifdef ESP32_C3
+      digitalWrite(LED_PIN, LOW);
+#else
       strip.neoPixelSetValue(0, 0, 0, 0, true);
+#endif
     }
     lastLedToggle = now;
   }
@@ -111,7 +157,7 @@ static const uint8_t keymap[2][ROWS][COLS] = {
   // Symbols / editing
   {KEY_TAB, KEY_ESC, '-', '=', '`', '[', ']', '\\', '\'', KEY_DELETE},
   // Arrows and nav
-  {KEY_LEFT_ARROW, KEY_DOWN_ARROW, KEY_UP_ARROW, KEY_RIGHT_ARROW, KEY_MENU, KEY_PAGE_DOWN, KEY_PAGE_UP, KEY_HOME, KEY_END, KEY_INSERT},
+  {KEY_LEFT_ARROW, KEY_DOWN_ARROW, KEY_UP_ARROW, KEY_RIGHT_ARROW, KEY_F1, KEY_PAGE_DOWN, KEY_PAGE_UP, KEY_HOME, KEY_END, KEY_INSERT},
   // Bottom row pass-through (kept transparent/none)
   {KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO, KC_NO}
 }
@@ -187,6 +233,13 @@ void debounceMatrix() {
 static bool prevDebounced[ROWS][COLS];
 
 void sendHIDReport() {
+#ifdef ESP32_C3
+  // Check if BLE keyboard is connected
+  if (!bleKeyboard.isConnected()) {
+    return;
+  }
+#endif
+
   uint8_t layer = debounced[FN_ROW][FN_COL] ? 1 : 0;
 
   for (uint8_t r = 0; r < ROWS; r++) {
@@ -208,6 +261,18 @@ void sendHIDReport() {
             
             if (code >= 0xE0 && code <= 0xE7) {
               // Modifier key
+#ifdef ESP32_C3
+              switch (code) {
+                case 0xE0: bleKeyboard.press(KEY_LEFT_CTRL); break;
+                case 0xE1: bleKeyboard.press(KEY_LEFT_SHIFT); break;
+                case 0xE2: bleKeyboard.press(KEY_LEFT_ALT); break;
+                case 0xE3: bleKeyboard.press(KEY_LEFT_GUI); break;
+                case 0xE4: bleKeyboard.press(KEY_RIGHT_CTRL); break;
+                case 0xE5: bleKeyboard.press(KEY_RIGHT_SHIFT); break;
+                case 0xE6: bleKeyboard.press(KEY_RIGHT_ALT); break;
+                case 0xE7: bleKeyboard.press(KEY_RIGHT_GUI); break;
+              }
+#else
               switch (code) {
                 case 0xE0: Keyboard.press(KEY_LEFT_CTRL); break;
                 case 0xE1: Keyboard.press(KEY_LEFT_SHIFT); break;
@@ -218,14 +283,31 @@ void sendHIDReport() {
                 case 0xE6: Keyboard.press(KEY_RIGHT_ALT); break;
                 case 0xE7: Keyboard.press(KEY_RIGHT_GUI); break;
               }
+#endif
             } else {
               // Regular key
+#ifdef ESP32_C3
+              bleKeyboard.press(code);
+#else
               Keyboard.press(code);
+#endif
             }
           } else {
             // Key released
             if (code >= 0xE0 && code <= 0xE7) {
               // Modifier key
+#ifdef ESP32_C3
+              switch (code) {
+                case 0xE0: bleKeyboard.release(KEY_LEFT_CTRL); break;
+                case 0xE1: bleKeyboard.release(KEY_LEFT_SHIFT); break;
+                case 0xE2: bleKeyboard.release(KEY_LEFT_ALT); break;
+                case 0xE3: bleKeyboard.release(KEY_LEFT_GUI); break;
+                case 0xE4: bleKeyboard.release(KEY_RIGHT_CTRL); break;
+                case 0xE5: bleKeyboard.release(KEY_RIGHT_SHIFT); break;
+                case 0xE6: bleKeyboard.release(KEY_RIGHT_ALT); break;
+                case 0xE7: bleKeyboard.release(KEY_RIGHT_GUI); break;
+              }
+#else
               switch (code) {
                 case 0xE0: Keyboard.release(KEY_LEFT_CTRL); break;
                 case 0xE1: Keyboard.release(KEY_LEFT_SHIFT); break;
@@ -236,9 +318,14 @@ void sendHIDReport() {
                 case 0xE6: Keyboard.release(KEY_RIGHT_ALT); break;
                 case 0xE7: Keyboard.release(KEY_RIGHT_GUI); break;
               }
+#endif
             } else {
               // Regular key
+#ifdef ESP32_C3
+              bleKeyboard.release(code);
+#else
               Keyboard.release(code);
+#endif
             }
           }
         }

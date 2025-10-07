@@ -16,9 +16,7 @@
 #endif
 static uint32_t lastLedToggle = 0;
 static bool ledState = false;
-static uint32_t lastKeyPress = 0;
-static bool keyPressBlinkActive = false;
-#define KEY_BLINK_DURATION 200  // Key press blink duration in ms
+static bool anyKeyPressed = false;  // Track if any key is currently pressed
 
 #ifdef ESP32_C3
   BleKeyboard bleKeyboard("Thumb35", "MicroKeyboard", 100);
@@ -66,7 +64,8 @@ static uint8_t stableCount[ROWS][COLS];
 void setupHID() {
 #ifdef ESP32_C3
   bleKeyboard.begin();
-  delay(100);
+  // Give BLE stack more time to initialize and start advertising
+  delay(1000);
 #else
   Keyboard.begin();
   delay(100);
@@ -88,42 +87,47 @@ void setupLED() {
 void updateLED() {
   uint32_t now = millis();
   
-  // Check if we should show blink for key press
-  if (keyPressBlinkActive) {
-    if (now - lastKeyPress < KEY_BLINK_DURATION) {
-      // Turn on LED during key press blink
+  // If any key is pressed, keep LED on solid
+  if (anyKeyPressed) {
 #ifdef ESP32_C3
-      digitalWrite(LED_PIN, HIGH);
+    digitalWrite(LED_PIN, HIGH);
 #else
-      strip.neoPixelSetValue(0, 255, 0, 0, true);
+    strip.neoPixelSetValue(0, 255, 0, 0, true);  // Red for key press
 #endif
-      return;
-    } else {
-      // Key press blink finished
-      keyPressBlinkActive = false;
-    }
+    return;
   }
   
-  // Normal heartbeat blink
+#ifdef ESP32_C3
+  // BLE connection status indication
+  if (!bleKeyboard.isConnected()) {
+    // Fast blink when not connected (waiting for pairing)
+    if (now - lastLedToggle >= 250) {  // Toggle every 250ms (fast blink)
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+      lastLedToggle = now;
+    }
+  } else {
+    // Slow heartbeat when connected
+    if (now - lastLedToggle >= 2000) {  // Toggle every 2000ms (slow blink)
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+      lastLedToggle = now;
+    }
+  }
+#else
+  // Normal heartbeat blink for RP2040
   if (now - lastLedToggle >= 1000) {  // Toggle every 1000ms (1 second)
     ledState = !ledState;
     if (ledState) {
       // Turn on LED
-#ifdef ESP32_C3
-      digitalWrite(LED_PIN, HIGH);
-#else
       strip.neoPixelSetValue(0, 0, 0, 255, true);
-#endif
     } else {
       // Turn off LED
-#ifdef ESP32_C3
-      digitalWrite(LED_PIN, LOW);
-#else
       strip.neoPixelSetValue(0, 0, 0, 0, true);
-#endif
     }
     lastLedToggle = now;
   }
+#endif
 }
 
 // -------------------------------------------------------------------------
@@ -241,6 +245,40 @@ void sendHIDReport() {
 #endif
 
   uint8_t layer = debounced[FN_ROW][FN_COL] ? 1 : 0;
+  
+  // Check if any key is currently pressed (for LED feedback)
+  anyKeyPressed = false;
+  for (uint8_t r = 0; r < ROWS; r++) {
+    for (uint8_t c = 0; c < COLS; c++) {
+      // Skip the Fn key itself
+      if (r == FN_ROW && c == FN_COL) continue;
+      
+      if (debounced[r][c]) {
+        uint8_t code = keymap[layer][r][c];
+        Serial.print("Key pressed at R");
+        Serial.print(r);
+        Serial.print(" C");
+        Serial.print(c);
+        Serial.print(" Layer:");
+        Serial.print(layer);
+        Serial.print(" Code:0x");
+        Serial.print(code, HEX);
+        Serial.print(" (");
+        Serial.print((char)code);
+        Serial.println(")");
+        
+        if (code != KC_NO) {
+          anyKeyPressed = true;
+          break;
+        }
+      }
+    }
+    if (anyKeyPressed) break;
+  }
+  
+  if (anyKeyPressed) {
+    Serial.println("anyKeyPressed = TRUE");
+  }
 
   for (uint8_t r = 0; r < ROWS; r++) {
     for (uint8_t c = 0; c < COLS; c++) {
@@ -255,9 +293,7 @@ void sendHIDReport() {
         
         if (code != KC_NO) {
           if (currentState) {
-            // Key pressed - trigger red LED blink
-            lastKeyPress = millis();
-            keyPressBlinkActive = true;
+            // Key pressed
             
             if (code >= 0xE0 && code <= 0xE7) {
               // Modifier key
@@ -341,6 +377,10 @@ void sendHIDReport() {
 // -------------------------------------------------------------------------
 
 void setup() {
+  Serial.begin(115200);
+  delay(500);
+  Serial.println("Starting keyboard...");
+  
   setupHID();
   setupMatrixPins();
   setupLED();
@@ -354,6 +394,8 @@ void setup() {
       stableCount[r][c] = 0;
     }
   }
+  
+  Serial.println("Keyboard ready!");
 }
 
 void loop() {
@@ -361,5 +403,11 @@ void loop() {
   debounceMatrix();
   sendHIDReport();
   updateLED();
+  
+#ifdef ESP32_C3
+  // Slightly longer delay for BLE to reduce stack pressure
+  delay(5);
+#else
   delay(1);
+#endif
 }
